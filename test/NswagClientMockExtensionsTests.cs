@@ -83,9 +83,35 @@ public class NswagClientMockExtensionsTests
     }
 
     [Test]
-    public async Task UnmatchedRequest_ReturnsNotFoundRatherThanCallingNetwork()
+    public async Task UnmatchedRequest_ThrowsWithMethodAndUriAndRecordsRequest()
     {
-        await Assert.ThrowsAsync<HttpRequestException>(() => _client.GetItemAsync(999));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _client.GetItemAsync(999)
+        );
+        Assert.That(error!.Message, Does.Contain("GET https://mock.liquid.local/api/items/999"));
+        await _client.VerifyGetAsync("/api/items/999", Times.Once);
+    }
+
+    [Test]
+    public async Task UnmatchedRequest_CannotBeMistakenForAnExpectedNotFound()
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _client.FindItemAsync(999));
+    }
+
+    [Test]
+    public async Task ExplicitNotFound_CanBeHandledByTheCaller()
+    {
+        _client.MockGetError("/api/items/999", HttpStatusCode.NotFound);
+        Assert.That(await _client.FindItemAsync(999), Is.Null);
+    }
+
+    [Test]
+    public async Task UnmatchedQuery_ThrowsRatherThanReturningNotFound()
+    {
+        _client.MockGetAsync("/api/items/5?detail=false", new Item { Id = 5 });
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _client.GetItemAsync(5, detail: true)
+        );
     }
 
     [Test]
@@ -135,9 +161,20 @@ public class NswagClientMockExtensionsTests
 
             using var response = await httpClient.GetAsync(path);
             response.EnsureSuccessStatusCode();
-            return JsonConvert.DeserializeObject<Item>(
-                await response.Content.ReadAsStringAsync()
-            );
+            return JsonConvert.DeserializeObject<Item>(await response.Content.ReadAsStringAsync());
+        }
+
+        public async Task<Item?> FindItemAsync(int id)
+        {
+            try
+            {
+                return await GetItemAsync(id);
+            }
+            catch (HttpRequestException exception)
+                when (exception.StatusCode == HttpStatusCode.NotFound)
+            {
+                return null;
+            }
         }
 
         public async Task<Item[]> ListItemsAsync()

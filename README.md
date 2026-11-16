@@ -1,47 +1,74 @@
-# NSwag API client testing
+# NSwag generated-client testing
 
-This repository provides **Gainsway.NSwag.Testing**, an HTTP-level testing
-library for NSwag-generated C# clients, with no Kiota dependency.
+**Use generated interfaces and plain NSubstitute for business-unit tests.**
+Enable client interfaces through the generation tooling supplied by
+`Gainsway.LiquidApi.Auth`, inject `IBankingServiceClient` (for example), and
+configure/verify typed operations directly:
 
-## Installation
+```csharp
+var bankingClient = Substitute.For<IBankingServiceClient>();
+bankingClient.ApiBankTransfersWithdrawAsync(Arg.Any<WithdrawRequest>())
+    .Returns(response);
+
+await activity.TriggerBankWithdrawalWithStatusAsync(/* business inputs */);
+
+await bankingClient.Received(1).ApiBankTransfersWithdrawAsync(
+    Arg.Is<WithdrawRequest>(request => request.Amount == expectedAmount));
+```
+
+A changed operation, request or response type then fails compilation. These unit
+tests do not need this package or string-based HTTP paths.
+
+## When this package is useful
+
+`Gainsway.NSwag.Testing` is an **optional HTTP boundary-test utility**, not a
+replacement for interface substitutes. Use it only when a test must execute the
+actual generated client to verify outbound JSON, URI/query encoding, wire error
+mapping or required-field deserialization. Controller/component tests exercise
+the inbound API; they do not by themselves execute a downstream generated client's
+serializer. C# `required` checks source initializers, not JSON received from a
+remote service. An interface substitute cannot establish those wire contracts.
+
+Account-service keeps these checks in its integration/contract test project and
+uses plain NSubstitute interfaces in business-unit tests. No live network or
+authentication calls are made by this helper.
+
+## Optional installation and wire-level example
 
 ```sh
-dotnet add package Gainsway.NSwag.Testing
+dotnet add <contract-test-project> package Gainsway.NSwag.Testing
 ```
-
-## Example
 
 ```csharp
-using Gainsway.NSwag.Testing;
+var client = NswagClientMockExtensions.GetMockableClient<BankingServiceClient>();
+client.MockPostAsync("/api/bank-transfers/withdraw", response);
 
-var client = NswagClientMockExtensions.GetMockableClient<AccountServiceClient>();
+await client.ApiBankTransfersWithdrawAsync(request);
 
-client.MockGetAsync($"/api/accounts/{accountId}", new AccountDto { Id = accountId });
-var account = await new AccountsService(client).GetAccount(accountId);
-
-await client.VerifyGetAsync($"/api/accounts/{accountId}", Times.Once);
+await client.VerifyPostAsync("/api/bank-transfers/withdraw", Times.Once)
+    .WithBody<WithdrawRequest>(body => body.Amount == expectedAmount);
 ```
 
-For writes, use the familiar awaitable `Verify*Async` and `WithBody` pattern:
+Here the route is intentionally part of the wire assertion. Do not use this
+pattern to mock ordinary business-unit dependencies.
+
+## Strict requests and explicit errors
+
+**An unmatched method, path, query or predicate throws `InvalidOperationException`**
+with the method/URI. It never fabricates a 404 that production code could treat as
+an expected not-found result. The request remains recorded for diagnosis.
+Configure expected failures explicitly:
 
 ```csharp
-client.MockPostAsync("/api/accounts");  // 204 response
-await service.CreateAccount(accountInput);
-
-await client.VerifyPostAsync("/api/accounts", Times.Once)
-    .WithBody<AccountCreateDto>(body => body.Name == accountInput.Name);
+client.MockGetError("/api/items/404", HttpStatusCode.NotFound);
+client.MockGetAsync("/api/items/5", new HttpRequestException("offline"));
 ```
 
-Other helpers: `MockGetCollectionAsync`, `MockPostAsync`, `MockPutAsync`,
-`MockPatchAsync`, `MockDeleteAsync`, `MockGetError`,
-`MockPostError`, `GetMockRequests`, `Times.Once`, `Times.Never`,
-`Times.Exactly(n)`. Mock rules match HTTP method, path (including
-`{parameter}` placeholders) and optional query string. Last matching rule
-wins. JSON responses are serialized using Newtonsoft.Json and camelCase
-properties, matching NSwag's default serialization behavior.
+Helpers support GET/POST/PUT/PATCH/DELETE, collections, no-content/error/transport
+responses, `GetMockRequests()`, `Times` and request-body verification. Rules match
+HTTP method/path segments (`{id}` placeholders are supported), optional query
+strings and predicates; the last matching rule wins. JSON uses Newtonsoft.Json
+with camelCase properties, matching NSwag's default serializer.
 
-`GetMockableClient<T>()` constructs a real generated client with an injected
-in-memory `HttpClient`. No authentication network calls or live service
-requests are made. The helper captures HTTP requests for later verification.
-
-See [MIGRATION.md](MIGRATION.md) for changes required in service tests.
+See [MIGRATION.md](MIGRATION.md) for the split between typed unit tests and explicit
+wire-contract tests. The existing `Gainsway.Kiota.Testing` package is unchanged.

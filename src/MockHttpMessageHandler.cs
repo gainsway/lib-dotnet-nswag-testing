@@ -122,15 +122,14 @@ internal sealed class MockHttpMessageHandler : HttpMessageHandler
             }
         }
 
-        return responder?.Invoke()
-            ?? new HttpResponseMessage(HttpStatusCode.NotFound)
-            {
-                Content = new StringContent(
-                    $"No HTTP mock for {request.Method} {requestUri}",
-                    Encoding.UTF8,
-                    "text/plain"
-                ),
-            };
+        if (responder is null)
+        {
+            throw new InvalidOperationException(
+                $"No HTTP mock configured for {request.Method} {requestUri}. Configure an explicit response, including expected HTTP errors."
+            );
+        }
+
+        return responder();
     }
 
     private void Add(
